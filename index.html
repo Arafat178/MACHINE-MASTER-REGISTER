@@ -1,0 +1,161 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+  <meta name="theme-color" content="#0f172a" />
+  <title>Machine Master Register</title>
+
+  <link rel="manifest" href="manifest.json" />
+  <link rel="stylesheet" href="style.css" />
+
+  <!-- Excel ফাইল ব্রাউজারে পড়ার জন্য SheetJS -->
+  <script src="https://cdn.sheetjs.com/xlsx-0.20.3/package/dist/xlsx.full.min.js"></script>
+</head>
+<body>
+
+  <!-- হেডার -->
+  <header class="app-header">
+    <div class="header-top">
+      <div>
+        <h1>Machine Master</h1>
+        <p class="subtitle">Register &amp; Engineering Analytics</p>
+      </div>
+      <div class="header-actions">
+        <div class="count-badge" id="resultCount">0 / 0</div>
+        <button id="themeToggle" class="icon-btn" aria-label="Toggle dark mode">🌙</button>
+      </div>
+    </div>
+
+    <!-- সার্চ ও ফিল্টার (শুধু Register ভিউতে দেখাবে) -->
+    <div id="registerControls">
+      <div class="search-box">
+        <input
+          type="text"
+          id="searchInput"
+          placeholder="Search Name, ID, Model, Brand, Location..."
+          autocomplete="off"
+        />
+        <button id="clearSearch" class="clear-btn" aria-label="Clear search">&times;</button>
+      </div>
+
+      <!-- ডিপার্টমেন্ট ট্যাব (Excel থেকে অটোমেটিক তৈরি হবে) -->
+      <div class="dept-tabs" id="deptTabs"></div>
+
+      <div class="filter-row">
+        <select id="locationFilter">
+          <option value="ALL">All Locations &amp; Rooms</option>
+        </select>
+        <button id="exportCsvBtn" class="reset-btn" title="Export Filtered CSV">CSV</button>
+        <button id="resetFilters" class="reset-btn">Reset</button>
+      </div>
+    </div>
+  </header>
+
+  <!-- ভিউ ১: মেশিন রেজিস্টার লিস্ট -->
+  <main id="registerView" class="container view-section active">
+    <div id="statusMessage" class="status-msg">Loading Excel register...</div>
+    <div id="machineList" class="machine-grid"></div>
+  </main>
+
+  <!-- ভিউ ২: অ্যানালাইসিস ড্যাশবোর্ড -->
+  <main id="analyzeView" class="container view-section">
+    <div class="sub-tabs" id="analyzeSubTabs">
+      <button class="sub-tab active" data-panel="overview">Overview</button>
+      <button class="sub-tab" data-panel="audit">Data Audit</button>
+      <button class="sub-tab" data-panel="models">Common Models</button>
+      <button class="sub-tab" data-panel="codes">ID Codes</button>
+      <button class="sub-tab" data-panel="density">Buildings</button>
+    </div>
+
+    <div id="analyzeContent"></div>
+  </main>
+
+  <!-- ফ্লোটিং কম্পেয়ার বার -->
+  <div id="compareBar" class="compare-bar">
+    <span id="compareCount">0 selected</span>
+    <div class="compare-actions">
+      <button id="openCompareBtn" class="mini-primary-btn">Compare Now</button>
+      <button id="clearCompareBtn" class="mini-ghost-btn">Clear</button>
+    </div>
+  </div>
+
+  <!-- নিচের নেভিগেশন বার -->
+  <nav class="bottom-nav">
+    <button class="nav-btn active" data-view="register">
+      <span class="nav-icon">📋</span>
+      <span>Register</span>
+    </button>
+    <button class="nav-btn" data-view="analyze">
+      <span class="nav-icon">📊</span>
+      <span>Analyze</span>
+    </button>
+  </nav>
+
+  <!-- মেশিন ডিটেইলস পপ-আপ (Modal) -->
+  <div id="detailModal" class="modal-overlay" aria-hidden="true">
+    <div class="modal-sheet">
+      <div class="modal-header">
+        <div>
+          <span id="modalDeptBadge" class="badge">Department</span>
+          <h2 id="modalTitle">Machine Name</h2>
+          <p id="modalId" class="modal-id">ID No.</p>
+        </div>
+        <div class="modal-top-btns">
+          <button id="modalFavBtn" class="fav-btn" aria-label="Pin machine">☆</button>
+          <button id="closeModal" class="close-modal-btn">&times;</button>
+        </div>
+      </div>
+
+      <div id="modalBody" class="modal-body"></div>
+
+      <!-- লোকাল ফিল্ড নোট সেকশন -->
+      <div class="note-section">
+        <label for="noteInput">Field Inspection Note (Saved on this phone):</label>
+        <div class="note-row">
+          <input type="text" id="noteInput" placeholder="e.g. Vibration high, check bearing..." />
+          <button id="saveNoteBtn" class="mini-primary-btn">Save</button>
+        </div>
+      </div>
+
+      <div class="modal-footer dual-btns">
+        <button id="copyBtn" class="secondary-btn">Copy Info</button>
+        <button id="waShareBtn" class="primary-btn wa-btn">WhatsApp Share</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- পাশাপাশি তুলনা করার পপ-আপ (Compare Modal) -->
+  <div id="compareModal" class="modal-overlay" aria-hidden="true">
+    <div class="modal-sheet full-sheet">
+      <div class="modal-header">
+        <div>
+          <h2>Machine Comparison</h2>
+          <p class="subtitle">Side-by-side specification check</p>
+        </div>
+        <button id="closeCompareModal" class="close-modal-btn">&times;</button>
+      </div>
+      <div id="compareTableWrap" class="modal-body"></div>
+    </div>
+  </div>
+
+  <!-- অডিট / মডেল গ্রুপের মেশিন লিস্ট দেখার পপ-আপ -->
+  <div id="auditModal" class="modal-overlay" aria-hidden="true">
+    <div class="modal-sheet">
+      <div class="modal-header">
+        <div>
+          <h2 id="auditModalTitle">Filtered List</h2>
+          <p id="auditModalSub" class="subtitle"></p>
+        </div>
+        <button id="closeAuditModal" class="close-modal-btn">&times;</button>
+      </div>
+      <div id="auditModalList" class="modal-body"></div>
+    </div>
+  </div>
+
+  <!-- টোস্ট নোটিফিকেশন -->
+  <div id="toast" class="toast">Done!</div>
+
+  <script src="script.js"></script>
+</body>
+</html>
