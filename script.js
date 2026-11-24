@@ -1,17 +1,35 @@
 const EXCEL_FILE = "MACHINE MASTER REGISTER EXCEL.xlsx";
+const INSTRUMENT_EXCEL_FILE = "MASTER INSTRUMENT LIST.xlsx";
 
 let allMachines = [];
 let filteredMachines = [];
 let selectedDept = "ALL";
+let activeView = "register";
 let activeAnalyzePanel = "overview";
 let currentModalMachine = null;
+
+// ইনস্ট্রুমেন্ট স্টেট
+let allInstruments = [];
+let filteredInstruments = [];
+let selectedInstDept = "ALL";
+let currentModalInstrument = null;
+
+// মেশিন <-> ইনস্ট্রুমেন্ট অটো লিংক ম্যাপ
+// coreKey (যেমন ENG-ACR-001) -> Machine অবজেক্ট
+let machineByCoreId = {};
+// coreKey -> ওই মেশিনের অধীনে থাকা ইনস্ট্রুমেন্টের লিস্ট
+let instrumentsByCoreId = {};
 
 // লোকাল স্টোরেজ থেকে Favorites ও Notes লোড করা
 let favorites = new Set(JSON.parse(localStorage.getItem("mm_favorites") || "[]"));
 let machineNotes = JSON.parse(localStorage.getItem("mm_notes") || "{}");
+let instFavorites = new Set(JSON.parse(localStorage.getItem("mm_inst_favorites") || "[]"));
+let instNotes = JSON.parse(localStorage.getItem("mm_inst_notes") || "{}");
 let compareList = [];
 
-// DOM এলিমেন্ট
+// DOM এলিমেন্ট (হেডার ও মেশিন)
+const headerTitle = document.getElementById("headerTitle");
+const headerSubtitle = document.getElementById("headerSubtitle");
 const searchInput = document.getElementById("searchInput");
 const clearSearchBtn = document.getElementById("clearSearch");
 const deptTabs = document.getElementById("deptTabs");
@@ -24,16 +42,32 @@ const resultCount = document.getElementById("resultCount");
 const registerControls = document.getElementById("registerControls");
 const themeToggle = document.getElementById("themeToggle");
 
+// DOM এলিমেন্ট (ইনস্ট্রুমেন্ট)
+const instrumentControls = document.getElementById("instrumentControls");
+const instSearchInput = document.getElementById("instSearchInput");
+const clearInstSearchBtn = document.getElementById("clearInstSearch");
+const instDeptTabs = document.getElementById("instDeptTabs");
+const instParentFilter = document.getElementById("instParentFilter");
+const instCodeFilter = document.getElementById("instCodeFilter");
+const exportInstCsvBtn = document.getElementById("exportInstCsvBtn");
+const resetInstFiltersBtn = document.getElementById("resetInstFilters");
+const instrumentsView = document.getElementById("instrumentsView");
+const instrumentList = document.getElementById("instrumentList");
+const instStatusMessage = document.getElementById("instStatusMessage");
+
+// ভিউ ও অ্যানালাইসিস
 const registerView = document.getElementById("registerView");
 const analyzeView = document.getElementById("analyzeView");
 const analyzeContent = document.getElementById("analyzeContent");
 const analyzeSubTabs = document.getElementById("analyzeSubTabs");
 
+// কম্পেয়ার বার
 const compareBar = document.getElementById("compareBar");
 const compareCount = document.getElementById("compareCount");
 const openCompareBtn = document.getElementById("openCompareBtn");
 const clearCompareBtn = document.getElementById("clearCompareBtn");
 
+// মেশিন ডিটেইল মডাল
 const detailModal = document.getElementById("detailModal");
 const modalDeptBadge = document.getElementById("modalDeptBadge");
 const modalTitle = document.getElementById("modalTitle");
@@ -46,6 +80,20 @@ const saveNoteBtn = document.getElementById("saveNoteBtn");
 const copyBtn = document.getElementById("copyBtn");
 const waShareBtn = document.getElementById("waShareBtn");
 
+// ইনস্ট্রুমেন্ট ডিটেইল মডাল
+const instDetailModal = document.getElementById("instDetailModal");
+const instModalBadge = document.getElementById("instModalBadge");
+const instModalTitle = document.getElementById("instModalTitle");
+const instModalId = document.getElementById("instModalId");
+const instModalBody = document.getElementById("instModalBody");
+const instModalFavBtn = document.getElementById("instModalFavBtn");
+const closeInstModalBtn = document.getElementById("closeInstModal");
+const instNoteInput = document.getElementById("instNoteInput");
+const saveInstNoteBtn = document.getElementById("saveInstNoteBtn");
+const copyInstBtn = document.getElementById("copyInstBtn");
+const waShareInstBtn = document.getElementById("waShareInstBtn");
+
+// কম্পেয়ার ও অডিট মডাল
 const compareModal = document.getElementById("compareModal");
 const compareTableWrap = document.getElementById("compareTableWrap");
 const closeCompareModal = document.getElementById("closeCompareModal");
@@ -70,16 +118,97 @@ themeToggle.addEventListener("click", () => {
   themeToggle.textContent = isDark ? "☀️" : "🌙";
 });
 
-// প্রতিটি মেশিনের ইউনিক কী (ID না থাকলে Sl ব্যবহার করবে)
+// প্রতিটি মেশিন ও ইনস্ট্রুমেন্টের ইউনিক কী
 function getMachineKey(m) {
   return m.id || `SL-${m.sl}-${m.name}`;
 }
 
-// ১. Excel ফাইল লোড করা
-async function loadExcelData() {
+function getInstrumentKey(inst) {
+  return inst.id || `INST-SL-${inst.sl}-${inst.description}-${inst.parentMc}`;
+}
+
+// মেশিন আইডি (যেমন 1-ENG-ACR-001) থেকে কোর আইডি (ENG-ACR-001) বের করা
+function extractMachineCoreId(machineId) {
+  if (!machineId) return "";
+  const parts = machineId.trim().split("-").map((p) => p.trim()).filter(Boolean);
+  if (parts.length >= 4) {
+    return `${parts[1]}-${parts[2]}-${parts[3]}`.toUpperCase();
+  }
+  if (parts.length === 3) {
+    return `${parts[0]}-${parts[1]}-${parts[2]}`.toUpperCase();
+  }
+  return "";
+}
+
+// ইনস্ট্রুমেন্ট আইডি (যেমন ENG-ACR-001-PG-01) পার্স করা
+// ফরম্যাট: dept-machineCode-machineSeq-instCode-instSeq
+function parseInstrumentId(rawId) {
+  const clean = String(rawId || "").trim().toUpperCase();
+  if (!clean) {
+    return {
+      deptCode: "",
+      machineCode: "",
+      machineSeq: "",
+      parentCoreId: "",
+      instCode: "",
+      instSeq: "",
+      isValidFormat: false,
+    };
+  }
+  const parts = clean.split("-").map((p) => p.trim()).filter(Boolean);
+  const deptCode = parts[0] || "";
+  const machineCode = parts[1] || "";
+  const machineSeq = parts[2] || "";
+  const instCode = parts[3] || "";
+  const instSeq = parts[4] || "";
+  const parentCoreId = parts.length >= 3 ? `${deptCode}-${machineCode}-${machineSeq}` : "";
+
+  return {
+    deptCode,
+    machineCode,
+    machineSeq,
+    parentCoreId,
+    instCode,
+    instSeq,
+    isValidFormat: parts.length === 5,
+  };
+}
+
+// মেশিন ও ইনস্ট্রুমেন্টের মধ্যে অটোমেটিক ক্রস-লিংক তৈরি
+function rebuildCrossLinks() {
+  machineByCoreId = {};
+  instrumentsByCoreId = {};
+
+  allMachines.forEach((m) => {
+    const core = extractMachineCoreId(m.id);
+    if (core) machineByCoreId[core] = m;
+  });
+
+  allInstruments.forEach((inst) => {
+    inst.linkedMachine = inst.parentCoreId ? (machineByCoreId[inst.parentCoreId] || null) : null;
+    if (inst.parentCoreId) {
+      if (!instrumentsByCoreId[inst.parentCoreId]) {
+        instrumentsByCoreId[inst.parentCoreId] = [];
+      }
+      instrumentsByCoreId[inst.parentCoreId].push(inst);
+    }
+  });
+}
+
+// ১. দুটি Excel ফাইল একসাথে লোড করা
+async function loadAllData() {
+  await Promise.all([loadMachineExcel(), loadInstrumentExcel()]);
+  rebuildCrossLinks();
+  renderMachines();
+  renderInstruments();
+  updateHeaderBadge();
+  renderAnalyzePanel();
+}
+
+async function loadMachineExcel() {
   try {
     const response = await fetch(encodeURI(`./${EXCEL_FILE}`));
-    if (!response.ok) throw new Error("Excel file not found!");
+    if (!response.ok) throw new Error("Machine Excel file not found!");
 
     const arrayBuffer = await response.arrayBuffer();
     const workbook = XLSX.read(arrayBuffer, { type: "array" });
@@ -87,26 +216,26 @@ async function loadExcelData() {
     const worksheet = workbook.Sheets[firstSheetName];
     const rawRows = XLSX.utils.sheet_to_json(worksheet, { defval: "" });
 
-    allMachines = rawRows.map((row, idx) => ({
-      sl: String(row["Sl. No."] || idx + 1).trim(),
-      name: String(row["Machinery/Equipment Name"] || "").trim(),
-      id: String(row["ID No."] || "").trim(),
-      model: String(row["Model"] || "").trim(),
-      brand: String(row["Brand"] || "").trim(),
-      capacity: String(row["Capacity"] || "").trim(),
-      origin: String(row["Country of Origin"] || "").trim(),
-      department: String(row["Department"] || "Other").trim(),
-      location: String(row["Location & Room"] || "").trim(),
-      namePlate: String(row["NamePlate Name"] || "").trim(),
-      receivingDate: String(row["Date of Receiving"] || "").trim(),
-      logBy: String(row["Log Maintained By"] || "").trim(),
-    }));
+    allMachines = rawRows
+      .filter((row) => String(row["Machinery/Equipment Name"] || "").trim() || String(row["ID No."] || "").trim())
+      .map((row, idx) => ({
+        sl: String(row["Sl. No."] || idx + 1).trim(),
+        name: String(row["Machinery/Equipment Name"] || "").trim(),
+        id: String(row["ID No."] || "").trim(),
+        model: String(row["Model"] || "").trim(),
+        brand: String(row["Brand"] || "").trim(),
+        capacity: String(row["Capacity"] || "").trim(),
+        origin: String(row["Country of Origin"] || "").trim(),
+        department: String(row["Department"] || "Other").trim(),
+        location: String(row["Location & Room"] || "").trim(),
+        namePlate: String(row["NamePlate Name"] || "").trim(),
+        receivingDate: String(row["Date of Receiving"] || "").trim(),
+        logBy: String(row["Log Maintained By"] || "").trim(),
+      }));
 
     buildDeptTabs();
     populateLocations();
     statusMessage.style.display = "none";
-    renderMachines();
-    renderAnalyzePanel();
   } catch (error) {
     console.error(error);
     statusMessage.innerText =
@@ -114,7 +243,72 @@ async function loadExcelData() {
   }
 }
 
-// ডিপার্টমেন্ট ট্যাব অটোমেটিক তৈরি করা
+async function loadInstrumentExcel() {
+  try {
+    const response = await fetch(encodeURI(`./${INSTRUMENT_EXCEL_FILE}`));
+    if (!response.ok) throw new Error("Instrument Excel file not found!");
+
+    const arrayBuffer = await response.arrayBuffer();
+    const workbook = XLSX.read(arrayBuffer, { type: "array" });
+    const firstSheetName = workbook.SheetNames[0];
+    const worksheet = workbook.Sheets[firstSheetName];
+    const rawRows = XLSX.utils.sheet_to_json(worksheet, { defval: "" });
+
+    // শুধু যেসব রো-তে ডেসক্রিপশন, আইডি বা প্যারেন্ট মেশিন আছে সেগুলো নেওয়া হবে
+    allInstruments = rawRows
+      .filter(
+        (row) =>
+          String(row["Instrument Description"] || "").trim() ||
+          String(row["Instrument ID"] || "").trim() ||
+          String(row["Parent M/C"] || "").trim()
+      )
+      .map((row, idx) => {
+        const rawId = String(row["Instrument ID"] || "").trim();
+        const parsed = parseInstrumentId(rawId);
+        return {
+          sl: String(row["Sl."] || idx + 1).trim(),
+          description: String(row["Instrument Description"] || "").trim(),
+          id: rawId,
+          parentMc: String(row["Parent M/C"] || "").trim(),
+          location: String(row["Location"] || "").trim(),
+          range: String(row["Range"] || "").trim(),
+          unit: String(row["Measuring Unit"] || "").trim(),
+          remarks: String(row["Remarks"] || "").trim(),
+          deptCode: parsed.deptCode,
+          machineCode: parsed.machineCode,
+          machineSeq: parsed.machineSeq,
+          parentCoreId: parsed.parentCoreId,
+          instCode: parsed.instCode,
+          instSeq: parsed.instSeq,
+          isValidFormat: parsed.isValidFormat,
+          linkedMachine: null,
+        };
+      });
+
+    buildInstDeptTabs();
+    populateInstFilters();
+    instStatusMessage.style.display = "none";
+  } catch (error) {
+    console.error(error);
+    instStatusMessage.innerText =
+      "Failed to load Instrument Excel. Make sure 'MASTER INSTRUMENT LIST.xlsx' is in the same folder.";
+  }
+}
+
+// হেডারের কাউন্ট ব্যাজ আপডেট
+function updateHeaderBadge() {
+  if (activeView === "register") {
+    resultCount.textContent = `${filteredMachines.length} / ${allMachines.length}`;
+  } else if (activeView === "instruments") {
+    resultCount.textContent = `${filteredInstruments.length} / ${allInstruments.length}`;
+  } else {
+    resultCount.textContent = `${allMachines.length} M | ${allInstruments.length} I`;
+  }
+}
+
+// ==========================================
+// ২. মেশিন রেজিস্টার ফিল্টার ও রেন্ডার
+// ==========================================
 function buildDeptTabs() {
   const depts = [...new Set(allMachines.map((m) => m.department).filter(Boolean))].sort();
   let html = `<button class="tab-btn active" data-dept="ALL">All</button>`;
@@ -125,7 +319,6 @@ function buildDeptTabs() {
   deptTabs.innerHTML = html;
 }
 
-// লোকেশন ড্রপডাউন তৈরি
 function populateLocations() {
   const uniqueLocations = [
     ...new Set(allMachines.map((m) => m.location).filter(Boolean)),
@@ -142,13 +335,12 @@ function populateLocations() {
 
 function getDeptBadgeClass(dept) {
   const d = (dept || "").toLowerCase();
-  if (d === "engineering") return "badge-engineering";
-  if (d === "production") return "badge-production";
-  if (d === "warehouse") return "badge-warehouse";
+  if (d === "engineering" || d === "eng") return "badge-engineering";
+  if (d === "production" || d === "prd") return "badge-production";
+  if (d === "warehouse" || d === "whs") return "badge-warehouse";
   return "badge-default";
 }
 
-// ২. মেশিন লিস্ট রেন্ডার করা
 function renderMachines() {
   const query = searchInput.value.trim().toLowerCase();
   const selectedLoc = locationFilter.value;
@@ -174,7 +366,7 @@ function renderMachines() {
     return matchDept && matchLoc && matchSearch;
   });
 
-  resultCount.textContent = `${filteredMachines.length} / ${allMachines.length}`;
+  if (activeView === "register") updateHeaderBadge();
   machineList.innerHTML = "";
 
   if (filteredMachines.length === 0) {
@@ -194,6 +386,8 @@ function renderMachines() {
     const isFav = favorites.has(key);
     const isCmp = compareList.some((x) => getMachineKey(x) === key);
     const note = machineNotes[key];
+    const core = extractMachineCoreId(m.id);
+    const linkedInstCount = core && instrumentsByCoreId[core] ? instrumentsByCoreId[core].length : 0;
 
     const card = document.createElement("div");
     card.className = "machine-card";
@@ -205,6 +399,7 @@ function renderMachines() {
       <div class="card-id-row">
         <span class="machine-id">${m.id || "NO ID"}</span>
         <div class="card-actions">
+          ${linkedInstCount ? `<span class="inst-count-pill">🎛️ ${linkedInstCount}</span>` : ""}
           <button class="cmp-chip ${isCmp ? "selected" : ""}" data-cmp="1">
             ${isCmp ? "✓ Added" : "+ Compare"}
           </button>
@@ -230,7 +425,149 @@ function renderMachines() {
   machineList.appendChild(fragment);
 }
 
-// ৩. কম্পেয়ার ফিচার (সর্বোচ্চ ৩টি মেশিন)
+// ==========================================
+// ৩. মেশিন ইনস্ট্রুমেন্ট লিস্ট ফিল্টার ও রেন্ডার
+// ==========================================
+function buildInstDeptTabs() {
+  const deptCodes = [...new Set(allInstruments.map((i) => i.deptCode).filter(Boolean))].sort();
+  const pendingCount = allInstruments.filter((i) => !i.id).length;
+
+  let html = `<button class="tab-btn active" data-inst-dept="ALL">All</button>`;
+  html += `<button class="tab-btn" data-inst-dept="FAV">★ Pinned</button>`;
+  html += `<button class="tab-btn warn-tab" data-inst-dept="PENDING">⚠ No ID (${pendingCount})</button>`;
+  deptCodes.forEach((d) => {
+    html += `<button class="tab-btn" data-inst-dept="${d}">${d}</button>`;
+  });
+  instDeptTabs.innerHTML = html;
+}
+
+function populateInstFilters() {
+  const uniqueParents = [
+    ...new Set(allInstruments.map((i) => i.parentMc).filter(Boolean)),
+  ].sort();
+
+  instParentFilter.innerHTML = `<option value="ALL">All Parent M/C (${uniqueParents.length})</option>`;
+  uniqueParents.forEach((p) => {
+    const opt = document.createElement("option");
+    opt.value = p;
+    opt.textContent = p;
+    instParentFilter.appendChild(opt);
+  });
+
+  const uniqueCodes = [
+    ...new Set(allInstruments.map((i) => i.instCode).filter(Boolean)),
+  ].sort();
+
+  instCodeFilter.innerHTML = `<option value="ALL">All Codes (${uniqueCodes.length})</option>`;
+  uniqueCodes.forEach((c) => {
+    const opt = document.createElement("option");
+    opt.value = c;
+    opt.textContent = c;
+    instCodeFilter.appendChild(opt);
+  });
+}
+
+function formatRangeUnit(range, unit) {
+  if (!range && !unit) return "—";
+  if (range && unit) return `${range} ${unit}`;
+  return range || unit;
+}
+
+function renderInstruments() {
+  const query = instSearchInput.value.trim().toLowerCase();
+  const selectedParent = instParentFilter.value;
+  const selectedCode = instCodeFilter.value;
+
+  filteredInstruments = allInstruments.filter((inst) => {
+    const key = getInstrumentKey(inst);
+    const matchDept =
+      selectedInstDept === "ALL" ||
+      (selectedInstDept === "FAV" && instFavorites.has(key)) ||
+      (selectedInstDept === "PENDING" && !inst.id) ||
+      inst.deptCode === selectedInstDept;
+
+    const matchParent = selectedParent === "ALL" || inst.parentMc === selectedParent;
+    const matchCode = selectedCode === "ALL" || inst.instCode === selectedCode;
+
+    const linkedName = inst.linkedMachine ? inst.linkedMachine.name.toLowerCase() : "";
+    const linkedId = inst.linkedMachine ? inst.linkedMachine.id.toLowerCase() : "";
+
+    const matchSearch =
+      !query ||
+      inst.description.toLowerCase().includes(query) ||
+      inst.id.toLowerCase().includes(query) ||
+      inst.parentMc.toLowerCase().includes(query) ||
+      inst.location.toLowerCase().includes(query) ||
+      inst.range.toLowerCase().includes(query) ||
+      inst.unit.toLowerCase().includes(query) ||
+      inst.instCode.toLowerCase().includes(query) ||
+      inst.remarks.toLowerCase().includes(query) ||
+      linkedName.includes(query) ||
+      linkedId.includes(query);
+
+    return matchDept && matchParent && matchCode && matchSearch;
+  });
+
+  if (activeView === "instruments") updateHeaderBadge();
+  instrumentList.innerHTML = "";
+
+  if (filteredInstruments.length === 0) {
+    instStatusMessage.style.display = "block";
+    instStatusMessage.textContent =
+      selectedInstDept === "FAV"
+        ? "No pinned instruments yet. Tap ☆ inside any instrument to pin it."
+        : "No matching instruments found.";
+    return;
+  }
+
+  instStatusMessage.style.display = "none";
+  const fragment = document.createDocumentFragment();
+
+  filteredInstruments.forEach((inst) => {
+    const key = getInstrumentKey(inst);
+    const isFav = instFavorites.has(key);
+    const note = instNotes[key];
+    const rangeText = formatRangeUnit(inst.range, inst.unit);
+    const badgeClass = inst.deptCode
+      ? getDeptBadgeClass(inst.deptCode)
+      : "badge-pending";
+    const badgeText = inst.instCode
+      ? `${inst.deptCode} • ${inst.instCode}`
+      : inst.deptCode || "Pending ID";
+
+    const card = document.createElement("div");
+    card.className = "machine-card";
+    card.innerHTML = `
+      <div class="card-top">
+        <div class="machine-name">${isFav ? '<span class="star-mark">★</span> ' : ""}${inst.description || "Unnamed Instrument"}</div>
+        <span class="badge ${badgeClass}">${badgeText}</span>
+      </div>
+      <div class="card-id-row">
+        <span class="machine-id ${inst.id ? "" : "pending-id"}">${inst.id || "ID NOT ASSIGNED"}</span>
+        ${rangeText !== "—" ? `<span class="range-pill">${rangeText}</span>` : ""}
+      </div>
+      <div class="card-meta">
+        <span><strong>Parent M/C:</strong> ${inst.parentMc || "—"}</span>
+        <span><strong>Location:</strong> ${inst.location || "—"}</span>
+      </div>
+      ${
+        inst.linkedMachine
+          ? `<div class="linked-pill">🔗 ${inst.linkedMachine.id} (${inst.linkedMachine.name})</div>`
+          : ""
+      }
+      ${note ? `<div class="note-pill">📝 ${note}</div>` : ""}
+    `;
+
+    card.addEventListener("click", () => openInstModal(inst));
+    fragment.appendChild(card);
+  });
+
+  instrumentList.appendChild(fragment);
+}
+
+// ==========================================
+// ৪. কম্পেয়ার ফিচার (সর্বোচ্চ ৩টি মেশিন)
+// ==========================================
 function toggleCompare(machine) {
   const key = getMachineKey(machine);
   const idx = compareList.findIndex((x) => getMachineKey(x) === key);
@@ -248,7 +585,7 @@ function toggleCompare(machine) {
 }
 
 function updateCompareBar() {
-  if (compareList.length > 0) {
+  if (compareList.length > 0 && activeView === "register") {
     compareBar.classList.add("show");
     compareCount.textContent = `${compareList.length} machine(s) selected`;
   } else {
@@ -295,7 +632,9 @@ clearCompareBtn.addEventListener("click", () => {
 
 closeCompareModal.addEventListener("click", () => compareModal.classList.remove("open"));
 
-// ৪. ডিটেইল মডাল, ফেভারিট ও নোট
+// ==========================================
+// ৫. মেশিন ডিটেইল মডাল (লিংকড ইনস্ট্রুমেন্টসহ)
+// ==========================================
 function openModal(m) {
   currentModalMachine = m;
   const key = getMachineKey(m);
@@ -320,7 +659,7 @@ function openModal(m) {
     ["Log Maintained By", m.logBy],
   ];
 
-  modalBody.innerHTML = specs
+  let bodyHtml = specs
     .map(
       ([label, val]) => `
       <div class="spec-row">
@@ -329,6 +668,39 @@ function openModal(m) {
       </div>`
     )
     .join("");
+
+  // এই মেশিনের অধীনে থাকা সব ইনস্ট্রুমেন্ট দেখানো
+  const core = extractMachineCoreId(m.id);
+  const linkedInsts = core && instrumentsByCoreId[core] ? instrumentsByCoreId[core] : [];
+
+  if (linkedInsts.length > 0) {
+    bodyHtml += `
+      <div class="linked-section">
+        <h4>Installed Instruments (${linkedInsts.length})</h4>
+        ${linkedInsts
+          .map(
+            (inst, idx) => `
+            <div class="linked-item" data-linked-inst-idx="${idx}">
+              <div>
+                <div class="linked-item-title">${inst.description || "Instrument"}</div>
+                <div class="linked-item-sub">${inst.id || "Pending ID"} • ${inst.location || "—"} • ${formatRangeUnit(inst.range, inst.unit)}</div>
+              </div>
+              <span class="linked-arrow">→</span>
+            </div>`
+          )
+          .join("")}
+      </div>`;
+  }
+
+  modalBody.innerHTML = bodyHtml;
+
+  modalBody.querySelectorAll("[data-linked-inst-idx]").forEach((el) => {
+    el.addEventListener("click", () => {
+      const targetInst = linkedInsts[Number(el.dataset.linkedInstIdx)];
+      detailModal.classList.remove("open");
+      openInstModal(targetInst);
+    });
+  });
 
   detailModal.classList.add("open");
 }
@@ -397,14 +769,150 @@ detailModal.addEventListener("click", (e) => {
   if (e.target === detailModal) detailModal.classList.remove("open");
 });
 
-// ৫. ফিল্টার্ড CSV এক্সপোর্ট
-exportCsvBtn.addEventListener("click", () => {
-  if (!filteredMachines.length) return showToast("Nothing to export");
-  const headers = ["Sl", "Name", "ID", "Model", "Brand", "Capacity", "Origin", "Department", "Location", "Note"];
-  const rows = filteredMachines.map((m) => [
-    m.sl, m.name, m.id, m.model, m.brand, m.capacity, m.origin, m.department, m.location,
-    machineNotes[getMachineKey(m)] || ""
-  ]);
+// ==========================================
+// ৬. ইনস্ট্রুমেন্ট ডিটেইল মডাল (প্যারেন্ট মেশিন লিংকসহ)
+// ==========================================
+function openInstModal(inst) {
+  currentModalInstrument = inst;
+  const key = getInstrumentKey(inst);
+
+  instModalBadge.textContent = inst.instCode
+    ? `${inst.deptCode} • ${inst.instCode}`
+    : inst.deptCode || "Pending ID";
+  instModalBadge.className = `badge ${inst.deptCode ? getDeptBadgeClass(inst.deptCode) : "badge-pending"}`;
+  instModalTitle.textContent = inst.description || "Unnamed Instrument";
+  instModalId.textContent = `ID: ${inst.id || "NOT ASSIGNED"}  |  Sl. #${inst.sl}`;
+
+  instModalFavBtn.textContent = instFavorites.has(key) ? "★" : "☆";
+  instModalFavBtn.classList.toggle("active", instFavorites.has(key));
+  instNoteInput.value = instNotes[key] || "";
+
+  let html = "";
+
+  // ৫-পার্ট আইডি ব্রেকডাউন কার্ড (আইডি থাকলে দেখাবে)
+  if (inst.id) {
+    html += `
+      <div class="id-breakdown">
+        <div class="id-part"><div class="id-part-val">${inst.deptCode || "—"}</div><div class="id-part-lbl">Dept</div></div>
+        <div class="id-part"><div class="id-part-val">${inst.machineCode || "—"}</div><div class="id-part-lbl">M/C Code</div></div>
+        <div class="id-part"><div class="id-part-val">${inst.machineSeq || "—"}</div><div class="id-part-lbl">M/C Seq</div></div>
+        <div class="id-part"><div class="id-part-val">${inst.instCode || "—"}</div><div class="id-part-lbl">Inst Code</div></div>
+        <div class="id-part"><div class="id-part-val">${inst.instSeq || "—"}</div><div class="id-part-lbl">Inst Seq</div></div>
+      </div>`;
+  }
+
+  const specs = [
+    ["Parent M/C (Excel)", inst.parentMc],
+    ["Mounting / Location", inst.location],
+    ["Operating Range", inst.range],
+    ["Measuring Unit", inst.unit],
+    ["Remarks", inst.remarks],
+  ];
+
+  html += specs
+    .map(
+      ([label, val]) => `
+      <div class="spec-row">
+        <span class="spec-label">${label}</span>
+        <span class="spec-value">${val || "—"}</span>
+      </div>`
+    )
+    .join("");
+
+  // মেশিন মাস্টার রেজিস্টারের সাথে অটো-ম্যাচ হলে ক্লিকেবল কার্ড দেখাবে
+  if (inst.linkedMachine) {
+    const lm = inst.linkedMachine;
+    html += `
+      <div class="linked-section">
+        <h4>Linked Parent Machine (Master Register)</h4>
+        <div class="linked-item" id="jumpToParentMachine">
+          <div>
+            <div class="linked-item-title">${lm.name}</div>
+            <div class="linked-item-sub">${lm.id} • ${lm.brand || "—"} • ${lm.location || "—"}</div>
+          </div>
+          <span class="linked-arrow">→</span>
+        </div>
+      </div>`;
+  }
+
+  instModalBody.innerHTML = html;
+
+  const jumpBtn = document.getElementById("jumpToParentMachine");
+  if (jumpBtn && inst.linkedMachine) {
+    jumpBtn.addEventListener("click", () => {
+      instDetailModal.classList.remove("open");
+      openModal(inst.linkedMachine);
+    });
+  }
+
+  instDetailModal.classList.add("open");
+}
+
+instModalFavBtn.addEventListener("click", () => {
+  if (!currentModalInstrument) return;
+  const key = getInstrumentKey(currentModalInstrument);
+  if (instFavorites.has(key)) {
+    instFavorites.delete(key);
+    showToast("Removed from Pinned");
+  } else {
+    instFavorites.add(key);
+    showToast("Instrument pinned!");
+  }
+  localStorage.setItem("mm_inst_favorites", JSON.stringify([...instFavorites]));
+  instModalFavBtn.textContent = instFavorites.has(key) ? "★" : "☆";
+  instModalFavBtn.classList.toggle("active", instFavorites.has(key));
+  renderInstruments();
+});
+
+saveInstNoteBtn.addEventListener("click", () => {
+  if (!currentModalInstrument) return;
+  const key = getInstrumentKey(currentModalInstrument);
+  const val = instNoteInput.value.trim();
+  if (val) {
+    instNotes[key] = val;
+    showToast("Instrument note saved!");
+  } else {
+    delete instNotes[key];
+    showToast("Note cleared!");
+  }
+  localStorage.setItem("mm_inst_notes", JSON.stringify(instNotes));
+  renderInstruments();
+});
+
+function buildInstShareText(inst) {
+  const note = instNotes[getInstrumentKey(inst)];
+  return `Instrument: ${inst.description}
+Instrument ID: ${inst.id || "Not Assigned"}
+Parent M/C: ${inst.parentMc || "N/A"}${inst.linkedMachine ? ` (${inst.linkedMachine.id})` : ""}
+Location: ${inst.location || "N/A"}
+Range: ${formatRangeUnit(inst.range, inst.unit)}${inst.remarks ? `\nRemarks: ${inst.remarks}` : ""}${note ? `\nNote: ${note}` : ""}`;
+}
+
+copyInstBtn.addEventListener("click", async () => {
+  if (!currentModalInstrument) return;
+  try {
+    await navigator.clipboard.writeText(buildInstShareText(currentModalInstrument));
+    showToast("Instrument info copied!");
+  } catch {
+    showToast("Copy failed!");
+  }
+});
+
+waShareInstBtn.addEventListener("click", () => {
+  if (!currentModalInstrument) return;
+  const url = `https://wa.me/?text=${encodeURIComponent(buildInstShareText(currentModalInstrument))}`;
+  window.open(url, "_blank");
+});
+
+closeInstModalBtn.addEventListener("click", () => instDetailModal.classList.remove("open"));
+instDetailModal.addEventListener("click", (e) => {
+  if (e.target === instDetailModal) instDetailModal.classList.remove("open");
+});
+
+// ==========================================
+// ৭. CSV এক্সপোর্ট (মেশিন ও ইনস্ট্রুমেন্ট)
+// ==========================================
+function downloadCsv(filename, headers, rows) {
   const csv = [headers, ...rows]
     .map((r) => r.map((v) => `"${String(v).replace(/"/g, '""')}"`).join(","))
     .join("\n");
@@ -412,15 +920,39 @@ exportCsvBtn.addEventListener("click", () => {
   const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
   const a = document.createElement("a");
   a.href = URL.createObjectURL(blob);
-  a.download = `Machine_Register_${selectedDept}.csv`;
+  a.download = filename;
   a.click();
   showToast("CSV downloaded!");
+}
+
+exportCsvBtn.addEventListener("click", () => {
+  if (!filteredMachines.length) return showToast("Nothing to export");
+  const headers = ["Sl", "Name", "ID", "Model", "Brand", "Capacity", "Origin", "Department", "Location", "Note"];
+  const rows = filteredMachines.map((m) => [
+    m.sl, m.name, m.id, m.model, m.brand, m.capacity, m.origin, m.department, m.location,
+    machineNotes[getMachineKey(m)] || "",
+  ]);
+  downloadCsv(`Machine_Register_${selectedDept}.csv`, headers, rows);
+});
+
+exportInstCsvBtn.addEventListener("click", () => {
+  if (!filteredInstruments.length) return showToast("Nothing to export");
+  const headers = ["Sl", "Instrument Description", "Instrument ID", "Parent M/C", "Linked Machine ID", "Location", "Range", "Unit", "Remarks", "Note"];
+  const rows = filteredInstruments.map((i) => [
+    i.sl, i.description, i.id, i.parentMc, i.linkedMachine ? i.linkedMachine.id : "",
+    i.location, i.range, i.unit, i.remarks, instNotes[getInstrumentKey(i)] || "",
+  ]);
+  downloadCsv(`Instrument_List_${selectedInstDept}.csv`, headers, rows);
 });
 
 // ==========================================
-// ৬. অ্যানালাইসিস ড্যাশবোর্ড লজিক (ডাইনামিক)
+// ৮. অ্যানালাইসিস ড্যাশবোর্ড লজিক (ডাইনামিক)
 // ==========================================
 function renderAnalyzePanel() {
+  if (activeAnalyzePanel === "instruments") {
+    renderInstrumentAnalytics();
+    return;
+  }
   if (!allMachines.length) return;
 
   if (activeAnalyzePanel === "overview") renderOverview();
@@ -430,15 +962,14 @@ function renderAnalyzePanel() {
   else if (activeAnalyzePanel === "density") renderBuildingDensity();
 }
 
-// হেল্পার: বার চার্ট তৈরি
 function makeBarsHtml(entries, total, colorClass = "", clickType = "") {
   const maxVal = entries.length ? entries[0][1] : 1;
   return entries
     .map(([label, count]) => {
       const pct = Math.round((count / maxVal) * 100);
-      const share = ((count / total) * 100).toFixed(1);
+      const share = total ? ((count / total) * 100).toFixed(1) : "0.0";
       return `
-        <div class="bar-item" data-click-type="${clickType}" data-click-val="${label.replace(/"/g, "&quot;")}">
+        <div class="bar-item" data-click-type="${clickType}" data-click-val="${String(label).replace(/"/g, "&quot;")}">
           <div class="bar-head">
             <span><strong>${label}</strong></span>
             <span>${count} (${share}%)</span>
@@ -451,7 +982,7 @@ function makeBarsHtml(entries, total, colorClass = "", clickType = "") {
     .join("");
 }
 
-// ক) Overview: KPI + Dept + Normalized Brands + Countries
+// ক) Overview
 function renderOverview() {
   const total = allMachines.length;
   const uniqueBrands = new Set(allMachines.map((m) => m.brand.toLowerCase()).filter(Boolean)).size;
@@ -467,7 +998,6 @@ function renderOverview() {
     return Object.entries(map).sort((a, b) => b[1] - a[1]);
   };
 
-  // কেস-ইনসেন্সিটিভ ব্র্যান্ড মার্জ (যেমন DAIKIN + Daikin)
   const brandCanonical = {};
   const brandCounts = {};
   allMachines.forEach((m) => {
@@ -487,9 +1017,9 @@ function renderOverview() {
   analyzeContent.innerHTML = `
     <div class="kpi-grid">
       <div class="kpi-card"><div class="kpi-val">${total}</div><div class="kpi-label">Total Machines</div></div>
+      <div class="kpi-card"><div class="kpi-val">${allInstruments.length}</div><div class="kpi-label">Total Instruments</div></div>
       <div class="kpi-card"><div class="kpi-val">${uniqueBrands}</div><div class="kpi-label">Unique Brands</div></div>
-      <div class="kpi-card"><div class="kpi-val">${uniqueLocs}</div><div class="kpi-label">Locations / Rooms</div></div>
-      <div class="kpi-card"><div class="kpi-val" style="color:var(--danger)">${missingCritical}</div><div class="kpi-label">Incomplete Records</div></div>
+      <div class="kpi-card"><div class="kpi-val" style="color:var(--danger)">${missingCritical}</div><div class="kpi-label">Incomplete Machines</div></div>
     </div>
 
     <div class="panel-card">
@@ -513,7 +1043,127 @@ function renderOverview() {
   attachAnalyzeClicks();
 }
 
-// খ) Data Audit: মিসিং ডাটা + বানানের গরমিল + ডুপ্লিকেট ID
+// নতুন: ইনস্ট্রুমেন্ট অ্যানালিটিক্স ও অডিট
+function renderInstrumentAnalytics() {
+  if (!allInstruments.length) {
+    analyzeContent.innerHTML = `<p class="status-msg">No instrument data loaded.</p>`;
+    return;
+  }
+
+  const total = allInstruments.length;
+  const assigned = allInstruments.filter((i) => i.id).length;
+  const pending = total - assigned;
+  const linked = allInstruments.filter((i) => i.linkedMachine).length;
+
+  // ডুপ্লিকেট ইনস্ট্রুমেন্ট আইডি চেক
+  const idMap = {};
+  allInstruments.forEach((i) => {
+    if (i.id) idMap[i.id.toUpperCase()] = (idMap[i.id.toUpperCase()] || 0) + 1;
+  });
+  const dupIds = Object.entries(idMap).filter(([, c]) => c > 1);
+
+  // ইনস্ট্রুমেন্ট কোড অনুযায়ী কাউন্ট (PG, PS, TS...)
+  const codeMap = {};
+  allInstruments.forEach((i) => {
+    const c = i.instCode || "NO ID";
+    codeMap[c] = (codeMap[c] || 0) + 1;
+  });
+  const topCodes = Object.entries(codeMap).sort((a, b) => b[1] - a[1]).slice(0, 12);
+
+  // প্যারেন্ট মেশিন অনুযায়ী কাউন্ট
+  const parentMap = {};
+  allInstruments.forEach((i) => {
+    if (!i.parentMc) return;
+    parentMap[i.parentMc] = (parentMap[i.parentMc] || 0) + 1;
+  });
+  const topParents = Object.entries(parentMap).sort((a, b) => b[1] - a[1]).slice(0, 10);
+
+  const instChecks = [
+    ["Missing Instrument ID", (i) => !i.id],
+    ["Invalid ID Format (Not 5 parts)", (i) => i.id && !i.isValidFormat],
+    ["Unlinked to Machine Register", (i) => i.id && !i.linkedMachine],
+    ["Missing Mounting Location", (i) => !i.location],
+    ["Missing Range", (i) => !i.range],
+    ["Missing Measuring Unit", (i) => !i.unit],
+  ];
+
+  let healthHtml = dupIds.length
+    ? `<div class="alert-item danger"><strong>Duplicate Instrument IDs:</strong> ${dupIds.map(([id, c]) => `${id} (${c}x)`).join(", ")}</div>`
+    : `<div class="alert-item" style="border-left-color:var(--success)">✓ No duplicate Instrument IDs found.</div>`;
+
+  const auditRowsHtml = instChecks
+    .map(([label, fn], idx) => {
+      const count = allInstruments.filter(fn).length;
+      return `
+        <div class="audit-row" data-inst-audit-idx="${idx}">
+          <span>${label}</span>
+          <span class="pill-count ${count === 0 ? "ok" : ""}">${count}</span>
+        </div>`;
+    })
+    .join("");
+
+  analyzeContent.innerHTML = `
+    <div class="kpi-grid">
+      <div class="kpi-card"><div class="kpi-val">${total}</div><div class="kpi-label">Total Instruments</div></div>
+      <div class="kpi-card"><div class="kpi-val" style="color:var(--success)">${assigned}</div><div class="kpi-label">ID Assigned</div></div>
+      <div class="kpi-card clickable" id="kpiPendingInst"><div class="kpi-val" style="color:var(--warning)">${pending}</div><div class="kpi-label">Pending ID (Tap)</div></div>
+      <div class="kpi-card"><div class="kpi-val">${linked}</div><div class="kpi-label">Linked to Machines</div></div>
+    </div>
+
+    <div class="panel-card">
+      <h3>Instrument Data Health</h3>
+      <p class="panel-desc">Update MASTER INSTRUMENT LIST.xlsx to resolve pending items</p>
+      ${healthHtml}
+      ${auditRowsHtml}
+    </div>
+
+    <div class="panel-card">
+      <h3>Instrument Type by Code</h3>
+      <p class="panel-desc">Auto-parsed from 4th segment (e.g. ENG-ACR-001-<strong>PG</strong>-01). Tap to inspect.</p>
+      ${makeBarsHtml(topCodes, total, "success", "instcode")}
+    </div>
+
+    <div class="panel-card">
+      <h3>Top 10 Parent Machines (by Instruments)</h3>
+      <p class="panel-desc">Tap any machine to see its instruments</p>
+      ${makeBarsHtml(topParents, total, "", "instparent")}
+    </div>
+  `;
+
+  const kpiPending = document.getElementById("kpiPendingInst");
+  if (kpiPending) {
+    kpiPending.addEventListener("click", () => {
+      const list = allInstruments.filter((i) => !i.id);
+      openInstAuditModal("Pending Instrument IDs", `${list.length} instruments need ID in Excel`, list);
+    });
+  }
+
+  analyzeContent.querySelectorAll("[data-inst-audit-idx]").forEach((el) => {
+    el.addEventListener("click", () => {
+      const [label, fn] = instChecks[Number(el.dataset.instAuditIdx)];
+      const list = allInstruments.filter(fn);
+      openInstAuditModal(label, `${list.length} instruments`, list);
+    });
+  });
+
+  analyzeContent.querySelectorAll('[data-click-type="instcode"]').forEach((el) => {
+    el.addEventListener("click", () => {
+      const code = el.dataset.clickVal;
+      const list = allInstruments.filter((i) => (i.instCode || "NO ID") === code);
+      openInstAuditModal(`Code: ${code}`, `${list.length} instruments`, list);
+    });
+  });
+
+  analyzeContent.querySelectorAll('[data-click-type="instparent"]').forEach((el) => {
+    el.addEventListener("click", () => {
+      const parent = el.dataset.clickVal;
+      const list = allInstruments.filter((i) => i.parentMc === parent);
+      openInstAuditModal(parent, `${list.length} instruments`, list);
+    });
+  });
+}
+
+// খ) Data Audit (Machines)
 function renderDataAudit() {
   const checks = [
     ["Missing ID No.", (m) => !m.id],
@@ -527,14 +1177,12 @@ function renderDataAudit() {
     ["Missing Log Maintained By", (m) => !m.logBy],
   ];
 
-  // ডুপ্লিকেট ID চেক
   const idMap = {};
   allMachines.forEach((m) => {
     if (m.id) idMap[m.id] = (idMap[m.id] || 0) + 1;
   });
   const dupIds = Object.entries(idMap).filter(([, c]) => c > 1);
 
-  // বানান/কেস গরমিল চেক (Brand ও Origin)
   const findCaseMismatches = (field) => {
     const groups = {};
     allMachines.forEach((m) => {
@@ -598,7 +1246,7 @@ function renderDataAudit() {
   });
 }
 
-// গ) Common Models: স্পেয়ার পার্টস কমনালিটি
+// গ) Common Models
 function renderCommonModels() {
   const modelMap = {};
   allMachines.forEach((m) => {
@@ -645,7 +1293,7 @@ function renderCommonModels() {
   attachAnalyzeClicks();
 }
 
-// ঘ) ID Code Category Parser (যেমন 4-ENG-DPG-001 -> DPG)
+// ঘ) ID Code Category Parser
 function renderIdCodes() {
   const codeMap = {};
   allMachines.forEach((m) => {
@@ -711,12 +1359,11 @@ function renderBuildingDensity() {
   });
 }
 
-// অ্যানালাইসিস বার ক্লিক করলে মেশিন লিস্ট পপ-আপ খোলা
 function attachAnalyzeClicks() {
   analyzeContent.querySelectorAll("[data-click-type]").forEach((el) => {
     const type = el.dataset.clickType;
     const val = el.dataset.clickVal;
-    if (!type || type === "zone") return;
+    if (!type || type === "zone" || type === "instcode" || type === "instparent") return;
 
     el.addEventListener("click", () => {
       let list = [];
@@ -769,21 +1416,72 @@ function openAuditModal(title, sub, list) {
   auditModal.classList.add("open");
 }
 
+function openInstAuditModal(title, sub, list) {
+  auditModalTitle.textContent = title;
+  auditModalSub.textContent = sub;
+
+  if (!list.length) {
+    auditModalList.innerHTML = `<p class="status-msg">All instrument records are complete!</p>`;
+  } else {
+    auditModalList.innerHTML = list
+      .map(
+        (inst, i) => `
+        <div class="audit-row" data-inst-list-idx="${i}">
+          <div>
+            <div><strong>${inst.description || "Unnamed"}</strong></div>
+            <div class="subtitle">${inst.id || "NO ID"} • ${inst.parentMc || "—"}</div>
+          </div>
+          <span class="badge ${inst.deptCode ? getDeptBadgeClass(inst.deptCode) : "badge-pending"}">${inst.instCode || "Pending"}</span>
+        </div>`
+      )
+      .join("");
+
+    auditModalList.querySelectorAll("[data-inst-list-idx]").forEach((row) => {
+      row.addEventListener("click", () => {
+        const inst = list[Number(row.dataset.instListIdx)];
+        auditModal.classList.remove("open");
+        openInstModal(inst);
+      });
+    });
+  }
+  auditModal.classList.add("open");
+}
+
 closeAuditModal.addEventListener("click", () => auditModal.classList.remove("open"));
 auditModal.addEventListener("click", (e) => {
   if (e.target === auditModal) auditModal.classList.remove("open");
 });
 
-// নেভিগেশন ও ইভেন্ট লিসেনার
+// ==========================================
+// ৯. নেভিগেশন ও ইভেন্ট লিসেনার
+// ==========================================
 document.querySelectorAll(".nav-btn").forEach((btn) => {
   btn.addEventListener("click", () => {
     document.querySelectorAll(".nav-btn").forEach((b) => b.classList.remove("active"));
     btn.classList.add("active");
-    const view = btn.dataset.view;
-    registerView.classList.toggle("active", view === "register");
-    analyzeView.classList.toggle("active", view === "analyze");
-    registerControls.style.display = view === "register" ? "block" : "none";
-    if (view === "analyze") renderAnalyzePanel();
+    activeView = btn.dataset.view;
+
+    registerView.classList.toggle("active", activeView === "register");
+    instrumentsView.classList.toggle("active", activeView === "instruments");
+    analyzeView.classList.toggle("active", activeView === "analyze");
+
+    registerControls.style.display = activeView === "register" ? "block" : "none";
+    instrumentControls.style.display = activeView === "instruments" ? "block" : "none";
+
+    if (activeView === "register") {
+      headerTitle.textContent = "Machine Master";
+      headerSubtitle.textContent = "Register & Engineering Analytics";
+    } else if (activeView === "instruments") {
+      headerTitle.textContent = "Instrument List";
+      headerSubtitle.textContent = "Sensors, Gauges & Machine Links";
+    } else {
+      headerTitle.textContent = "Analytics";
+      headerSubtitle.textContent = "Machines & Instruments Audit";
+      renderAnalyzePanel();
+    }
+
+    updateCompareBar();
+    updateHeaderBadge();
   });
 });
 
@@ -795,6 +1493,7 @@ analyzeSubTabs.addEventListener("click", (e) => {
   renderAnalyzePanel();
 });
 
+// মেশিন ফিল্টার লিসেনার
 searchInput.addEventListener("input", () => {
   clearSearchBtn.style.display = searchInput.value ? "block" : "none";
   renderMachines();
@@ -808,7 +1507,7 @@ clearSearchBtn.addEventListener("click", () => {
 
 deptTabs.addEventListener("click", (e) => {
   if (!e.target.classList.contains("tab-btn")) return;
-  document.querySelectorAll(".tab-btn").forEach((b) => b.classList.remove("active"));
+  deptTabs.querySelectorAll(".tab-btn").forEach((b) => b.classList.remove("active"));
   e.target.classList.add("active");
   selectedDept = e.target.dataset.dept;
   renderMachines();
@@ -821,10 +1520,45 @@ resetFiltersBtn.addEventListener("click", () => {
   clearSearchBtn.style.display = "none";
   selectedDept = "ALL";
   locationFilter.value = "ALL";
-  document.querySelectorAll(".tab-btn").forEach((b) => {
+  deptTabs.querySelectorAll(".tab-btn").forEach((b) => {
     b.classList.toggle("active", b.dataset.dept === "ALL");
   });
   renderMachines();
+});
+
+// ইনস্ট্রুমেন্ট ফিল্টার লিসেনার
+instSearchInput.addEventListener("input", () => {
+  clearInstSearchBtn.style.display = instSearchInput.value ? "block" : "none";
+  renderInstruments();
+});
+
+clearInstSearchBtn.addEventListener("click", () => {
+  instSearchInput.value = "";
+  clearInstSearchBtn.style.display = "none";
+  renderInstruments();
+});
+
+instDeptTabs.addEventListener("click", (e) => {
+  if (!e.target.classList.contains("tab-btn")) return;
+  instDeptTabs.querySelectorAll(".tab-btn").forEach((b) => b.classList.remove("active"));
+  e.target.classList.add("active");
+  selectedInstDept = e.target.dataset.instDept;
+  renderInstruments();
+});
+
+instParentFilter.addEventListener("change", renderInstruments);
+instCodeFilter.addEventListener("change", renderInstruments);
+
+resetInstFiltersBtn.addEventListener("click", () => {
+  instSearchInput.value = "";
+  clearInstSearchBtn.style.display = "none";
+  selectedInstDept = "ALL";
+  instParentFilter.value = "ALL";
+  instCodeFilter.value = "ALL";
+  instDeptTabs.querySelectorAll(".tab-btn").forEach((b) => {
+    b.classList.toggle("active", b.dataset.instDept === "ALL");
+  });
+  renderInstruments();
 });
 
 function showToast(msg) {
@@ -840,4 +1574,4 @@ if ("serviceWorker" in navigator) {
   });
 }
 
-loadExcelData();
+loadAllData();
