@@ -1,22 +1,21 @@
 const CACHE_NAME = "machine-master-v3";
-const CORE_ASSETS = [
+const STATIC_ASSETS = [
   "./",
   "./index.html",
   "./style.css",
   "./script.js",
   "./manifest.json",
-  "./icon-192.png",
-  "./icon-512.png"
+  "https://cdn.sheetjs.com/xlsx-0.20.3/package/dist/xlsx.full.min.js"
+];
+
+const EXCEL_URLS = [
+  encodeURI("./MACHINE MASTER REGISTER EXCEL.xlsx"),
+  encodeURI("./MASTER INSTRUMENT LIST.xlsx")
 ];
 
 self.addEventListener("install", (event) => {
   event.waitUntil(
-    caches.open(CACHE_NAME).then((cache) => {
-      // প্রতিটি ফাইল আলাদাভাবে ক্যাশ করা, যাতে একটি ফেইল করলেও SW ইনস্টল হয়
-      return Promise.allSettled(
-        CORE_ASSETS.map((url) => cache.add(url))
-      );
-    })
+    caches.open(CACHE_NAME).then((cache) => cache.addAll([...STATIC_ASSETS, ...EXCEL_URLS]))
   );
   self.skipWaiting();
 });
@@ -30,6 +29,7 @@ self.addEventListener("activate", (event) => {
   self.clients.claim();
 });
 
+// সব .xlsx ফাইলের জন্য Network-First: Excel আপডেট করলেই নতুন ডাটা অটোমেটিক লোড হবে
 self.addEventListener("fetch", (event) => {
   if (event.request.url.includes(".xlsx")) {
     event.respondWith(
