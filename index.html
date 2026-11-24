@@ -7,8 +7,6 @@
   <title>Machine Master Register</title>
 
   <link rel="manifest" href="manifest.json" />
-  <link rel="icon" type="image/png" sizes="192x192" href="icon-192.png" />
-  <link rel="apple-touch-icon" href="icon-192.png" />
   <link rel="stylesheet" href="style.css" />
 
   <!-- Excel ফাইল ব্রাউজারে পড়ার জন্য SheetJS -->
@@ -20,8 +18,8 @@
   <header class="app-header">
     <div class="header-top">
       <div>
-        <h1>Machine Master</h1>
-        <p class="subtitle">Register &amp; Engineering Analytics</p>
+        <h1 id="headerTitle">Machine Master</h1>
+        <p class="subtitle" id="headerSubtitle">Register &amp; Engineering Analytics</p>
       </div>
       <div class="header-actions">
         <div class="count-badge" id="resultCount">0 / 0</div>
@@ -29,7 +27,7 @@
       </div>
     </div>
 
-    <!-- সার্চ ও ফিল্টার (শুধু Register ভিউতে দেখাবে) -->
+    <!-- সার্চ ও ফিল্টার: মেশিন রেজিস্টার ভিউ -->
     <div id="registerControls">
       <div class="search-box">
         <input
@@ -52,6 +50,33 @@
         <button id="resetFilters" class="reset-btn">Reset</button>
       </div>
     </div>
+
+    <!-- সার্চ ও ফিল্টার: ইনস্ট্রুমেন্ট লিস্ট ভিউ -->
+    <div id="instrumentControls" style="display: none;">
+      <div class="search-box">
+        <input
+          type="text"
+          id="instSearchInput"
+          placeholder="Search Instrument ID, Description, Parent M/C, Range..."
+          autocomplete="off"
+        />
+        <button id="clearInstSearch" class="clear-btn" aria-label="Clear instrument search">&times;</button>
+      </div>
+
+      <!-- ইনস্ট্রুমেন্ট ডিপার্টমেন্ট ও স্ট্যাটাস ট্যাব (Excel থেকে অটোমেটিক) -->
+      <div class="dept-tabs" id="instDeptTabs"></div>
+
+      <div class="filter-row">
+        <select id="instParentFilter">
+          <option value="ALL">All Parent Machines</option>
+        </select>
+        <select id="instCodeFilter" class="compact-select">
+          <option value="ALL">All Codes</option>
+        </select>
+        <button id="exportInstCsvBtn" class="reset-btn" title="Export Filtered Instruments CSV">CSV</button>
+        <button id="resetInstFilters" class="reset-btn">Reset</button>
+      </div>
+    </div>
   </header>
 
   <!-- ভিউ ১: মেশিন রেজিস্টার লিস্ট -->
@@ -60,10 +85,17 @@
     <div id="machineList" class="machine-grid"></div>
   </main>
 
-  <!-- ভিউ ২: অ্যানালাইসিস ড্যাশবোর্ড -->
+  <!-- ভিউ ২: মেশিন ইনস্ট্রুমেন্ট লিস্ট -->
+  <main id="instrumentsView" class="container view-section">
+    <div id="instStatusMessage" class="status-msg">Loading Instrument Excel...</div>
+    <div id="instrumentList" class="machine-grid"></div>
+  </main>
+
+  <!-- ভিউ ৩: অ্যানালাইসিস ড্যাশবোর্ড -->
   <main id="analyzeView" class="container view-section">
     <div class="sub-tabs" id="analyzeSubTabs">
       <button class="sub-tab active" data-panel="overview">Overview</button>
+      <button class="sub-tab" data-panel="instruments">Instruments</button>
       <button class="sub-tab" data-panel="audit">Data Audit</button>
       <button class="sub-tab" data-panel="models">Common Models</button>
       <button class="sub-tab" data-panel="codes">ID Codes</button>
@@ -86,7 +118,11 @@
   <nav class="bottom-nav">
     <button class="nav-btn active" data-view="register">
       <span class="nav-icon">📋</span>
-      <span>Register</span>
+      <span>Machines</span>
+    </button>
+    <button class="nav-btn" data-view="instruments">
+      <span class="nav-icon">🎛️</span>
+      <span>Instruments</span>
     </button>
     <button class="nav-btn" data-view="analyze">
       <span class="nav-icon">📊</span>
@@ -127,6 +163,39 @@
     </div>
   </div>
 
+  <!-- ইনস্ট্রুমেন্ট ডিটেইলস পপ-আপ (Instrument Modal) -->
+  <div id="instDetailModal" class="modal-overlay" aria-hidden="true">
+    <div class="modal-sheet">
+      <div class="modal-header">
+        <div>
+          <span id="instModalBadge" class="badge">Instrument</span>
+          <h2 id="instModalTitle">Instrument Name</h2>
+          <p id="instModalId" class="modal-id">Instrument ID</p>
+        </div>
+        <div class="modal-top-btns">
+          <button id="instModalFavBtn" class="fav-btn" aria-label="Pin instrument">☆</button>
+          <button id="closeInstModal" class="close-modal-btn">&times;</button>
+        </div>
+      </div>
+
+      <div id="instModalBody" class="modal-body"></div>
+
+      <!-- ইনস্ট্রুমেন্ট ফিল্ড নোট -->
+      <div class="note-section">
+        <label for="instNoteInput">Calibration / Field Note (Saved on this phone):</label>
+        <div class="note-row">
+          <input type="text" id="instNoteInput" placeholder="e.g. Due for calibration, zero drift..." />
+          <button id="saveInstNoteBtn" class="mini-primary-btn">Save</button>
+        </div>
+      </div>
+
+      <div class="modal-footer dual-btns">
+        <button id="copyInstBtn" class="secondary-btn">Copy Info</button>
+        <button id="waShareInstBtn" class="primary-btn wa-btn">WhatsApp Share</button>
+      </div>
+    </div>
+  </div>
+
   <!-- পাশাপাশি তুলনা করার পপ-আপ (Compare Modal) -->
   <div id="compareModal" class="modal-overlay" aria-hidden="true">
     <div class="modal-sheet full-sheet">
@@ -141,7 +210,7 @@
     </div>
   </div>
 
-  <!-- অডিট / মডেল গ্রুপের মেশিন লিস্ট দেখার পপ-আপ -->
+  <!-- অডিট / মডেল গ্রুপের মেশিন বা ইনস্ট্রুমেন্ট লিস্ট দেখার পপ-আপ -->
   <div id="auditModal" class="modal-overlay" aria-hidden="true">
     <div class="modal-sheet">
       <div class="modal-header">
