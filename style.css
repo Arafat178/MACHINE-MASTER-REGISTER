@@ -147,6 +147,15 @@ body {
   color: #ffffff;
 }
 
+.tab-btn.warn-tab {
+  color: #fde68a;
+}
+
+.tab-btn.warn-tab.active {
+  background: var(--warning);
+  color: #ffffff;
+}
+
 .filter-row {
   display: flex;
   gap: 7px;
@@ -154,6 +163,7 @@ body {
 
 .filter-row select {
   flex: 1;
+  min-width: 0;
   padding: 8px 10px;
   border-radius: 10px;
   border: none;
@@ -161,6 +171,10 @@ body {
   background: rgba(255, 255, 255, 0.14);
   color: #ffffff;
   outline: none;
+}
+
+.filter-row select.compact-select {
+  flex: 0 0 112px;
 }
 
 .filter-row select option {
@@ -176,6 +190,7 @@ body {
   color: #ffffff;
   font-size: 0.78rem;
   cursor: pointer;
+  white-space: nowrap;
 }
 
 /* মেইন ভিউ */
@@ -229,6 +244,7 @@ body {
   align-items: center;
   margin-bottom: 8px;
   gap: 8px;
+  flex-wrap: wrap;
 }
 
 .machine-id {
@@ -241,10 +257,45 @@ body {
   border-radius: 6px;
 }
 
+.machine-id.pending-id {
+  color: var(--warning);
+  background: rgba(217, 119, 6, 0.14);
+}
+
+.range-pill {
+  font-size: 0.74rem;
+  font-weight: 600;
+  color: var(--success);
+  background: rgba(22, 163, 74, 0.12);
+  padding: 3px 8px;
+  border-radius: 6px;
+  white-space: nowrap;
+}
+
+.linked-pill {
+  display: inline-block;
+  margin-top: 7px;
+  font-size: 0.74rem;
+  font-weight: 600;
+  background: rgba(37, 99, 235, 0.1);
+  color: var(--accent);
+  padding: 3px 8px;
+  border-radius: 6px;
+}
+
+.inst-count-pill {
+  font-size: 0.72rem;
+  font-weight: 600;
+  color: #0d9488;
+  background: rgba(13, 148, 136, 0.12);
+  padding: 3px 8px;
+  border-radius: 6px;
+}
+
 .card-actions {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 6px;
 }
 
 .cmp-chip {
@@ -297,7 +348,87 @@ body {
 .badge-engineering { background: #dbeafe; color: #1d4ed8; }
 .badge-production  { background: #dcfce7; color: #15803d; }
 .badge-warehouse   { background: #fef3c7; color: #b45309; }
+.badge-instrument  { background: #ccfbf1; color: #0f766e; }
+.badge-pending     { background: #fef3c7; color: #b45309; }
 .badge-default     { background: #e2e8f0; color: #334155; }
+
+/* আইডি ব্রেকডাউন ও লিংকড সেকশন */
+.id-breakdown {
+  display: grid;
+  grid-template-columns: repeat(5, 1fr);
+  gap: 6px;
+  margin: 10px 0 12px;
+}
+
+.id-part {
+  background: var(--surface-alt);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 6px 4px;
+  text-align: center;
+}
+
+.id-part-val {
+  font-family: monospace;
+  font-size: 0.82rem;
+  font-weight: 700;
+  color: var(--accent);
+}
+
+.id-part-lbl {
+  font-size: 0.62rem;
+  color: var(--text-muted);
+  margin-top: 2px;
+}
+
+.linked-section {
+  margin-top: 14px;
+  padding-top: 10px;
+  border-top: 1px solid var(--border);
+}
+
+.linked-section h4 {
+  font-size: 0.82rem;
+  color: var(--text-muted);
+  margin-bottom: 8px;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+
+.linked-item {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 10px;
+  background: var(--surface-alt);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 9px 11px;
+  margin-bottom: 7px;
+  cursor: pointer;
+}
+
+.linked-item:hover {
+  border-color: var(--accent);
+}
+
+.linked-item-title {
+  font-size: 0.86rem;
+  font-weight: 700;
+}
+
+.linked-item-sub {
+  font-size: 0.74rem;
+  color: var(--text-muted);
+  margin-top: 2px;
+}
+
+.linked-arrow {
+  color: var(--accent);
+  font-weight: 700;
+  font-size: 1rem;
+  flex-shrink: 0;
+}
 
 /* অ্যানালাইসিস সাব-ট্যাব ও কার্ড */
 .sub-tabs {
@@ -339,6 +470,10 @@ body {
   border: 1px solid var(--border);
   border-radius: var(--radius);
   padding: 13px;
+}
+
+.kpi-card.clickable {
+  cursor: pointer;
 }
 
 .kpi-val {
@@ -383,6 +518,7 @@ body {
   justify-content: space-between;
   font-size: 0.82rem;
   margin-bottom: 4px;
+  gap: 8px;
 }
 
 .bar-track {
@@ -421,6 +557,7 @@ body {
   padding: 10px 0;
   border-bottom: 1px solid var(--border);
   cursor: pointer;
+  gap: 10px;
 }
 
 .audit-row:last-child { border-bottom: none; }
@@ -432,6 +569,7 @@ body {
   font-size: 0.78rem;
   padding: 3px 9px;
   border-radius: 999px;
+  flex-shrink: 0;
 }
 
 .pill-count.ok {
